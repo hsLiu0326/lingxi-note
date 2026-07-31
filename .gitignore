@@ -1,0 +1,13 @@
+node_modules/
+.idea/
+*.tar.gz
+.env
+.next/
+__pycache__/
+*.pyc
+*.db
+.env.local
+tsconfig.tsbuildinfo
+venv/
+# 本地运维脚本（含服务器凭据），不纳入公开仓库
+sync_to_server.sh
