@@ -11,6 +11,12 @@ import {
 } from "@/lib/api";
 import { setToken } from "@/lib/auth";
 import { showToast } from "@/components/Toast";
+import {
+  PASSWORD_HINT,
+  PASSWORD_MAX,
+  PASSWORD_PATTERN,
+  validatePassword,
+} from "@/lib/validate";
 
 type AuthMode = "password" | "phone" | "change-password";
 
@@ -41,8 +47,9 @@ export default function LoginPage() {
   const handleChangePassword = async (e: FormEvent) => {
     e.preventDefault();
 
-    if (newPw.length < 6) { showToast("error", "新密码至少 6 位"); return; }
     if (newPw !== confirmPw) { showToast("error", "两次密码输入不一致"); return; }
+    const pwdError = validatePassword(newPw);
+    if (pwdError) { showToast("error", pwdError); return; }
 
     setLoading(true);
     try {
@@ -87,6 +94,21 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+
+    // 注册时才校验密码规则；登录不校验，
+    // 避免历史账号（可能是旧规则下的密码）被挡在门外
+    if (mode === "password" && submode === "register") {
+      const pwdError = validatePassword(password);
+      if (pwdError) {
+        showToast("error", pwdError);
+        return;
+      }
+      if (!username.trim()) {
+        showToast("error", "请填写用户名");
+        return;
+      }
+    }
+
     setLoading(true);
 
     try {
@@ -238,11 +260,17 @@ export default function LoginPage() {
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="至少 6 位密码"
+                    placeholder={submode === "register" ? PASSWORD_HINT : "请输入密码"}
                     required
-                    minLength={6}
+                    maxLength={PASSWORD_MAX}
+                    {...(submode === "register"
+                      ? { minLength: 6, pattern: PASSWORD_PATTERN }
+                      : {})}
                     className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-shadow"
                   />
+                  {submode === "register" && (
+                    <p className="text-xs text-gray-400 mt-1">{PASSWORD_HINT}</p>
+                  )}
                 </div>
 
                 <button
@@ -290,11 +318,14 @@ export default function LoginPage() {
                   type="password"
                   value={newPw}
                   onChange={(e) => setNewPw(e.target.value)}
-                  placeholder="至少 6 位新密码"
+                  placeholder={PASSWORD_HINT}
                   required
                   minLength={6}
+                  maxLength={PASSWORD_MAX}
+                  pattern={PASSWORD_PATTERN}
                   className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-shadow"
                 />
+                <p className="text-xs text-gray-400 mt-1">{PASSWORD_HINT}</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -307,6 +338,7 @@ export default function LoginPage() {
                   placeholder="再次输入新密码"
                   required
                   minLength={6}
+                  maxLength={PASSWORD_MAX}
                   className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-shadow"
                 />
               </div>

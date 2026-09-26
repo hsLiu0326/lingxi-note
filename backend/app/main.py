@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.database import Base, engine
 from app.routers import auth, generate, user
@@ -40,6 +42,26 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(generate.router)
 app.include_router(user.router)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """把参数校验错误压成一句人话。
+
+    FastAPI 默认返回的 detail 是一个数组，前端的 ``err.detail`` 拿到的会是
+    "[object Object]"。这里统一拍平成字符串，前端可以直接显示。
+    """
+    errors = exc.errors()
+    if not errors:
+        return JSONResponse(status_code=422, content={"detail": "请求参数有误"})
+
+    first = errors[0]
+    field = ".".join(
+        str(part) for part in first.get("loc", ()) if part not in ("body", "query", "path")
+    )
+    msg = first.get("msg", "参数有误")
+    detail = f"{field}: {msg}" if field else msg
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 @app.get("/api/health")

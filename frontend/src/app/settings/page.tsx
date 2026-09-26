@@ -3,6 +3,12 @@
 import { useState, FormEvent } from "react";
 import { changePassword } from "@/lib/api";
 import AuthGuard from "@/components/AuthGuard";
+import {
+  PASSWORD_HINT,
+  PASSWORD_MAX,
+  PASSWORD_PATTERN,
+  validatePassword,
+} from "@/lib/validate";
 
 export default function SettingsPage() {
   const [oldPw, setOldPw] = useState("");
@@ -17,8 +23,9 @@ export default function SettingsPage() {
     setError("");
     setMessage("");
 
-    if (newPw.length < 6) {
-      setError("新密码至少 6 位");
+    const pwdError = validatePassword(newPw);
+    if (pwdError) {
+      setError(pwdError);
       return;
     }
     if (newPw !== confirmPw) {
@@ -71,11 +78,14 @@ export default function SettingsPage() {
                   type="password"
                   value={newPw}
                   onChange={(e) => setNewPw(e.target.value)}
-                  placeholder="至少 6 位新密码"
+                  placeholder={PASSWORD_HINT}
                   required
                   minLength={6}
+                  maxLength={PASSWORD_MAX}
+                  pattern={PASSWORD_PATTERN}
                   className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 />
+                <p className="text-xs text-gray-400 mt-1">{PASSWORD_HINT}</p>
               </div>
 
               <div>
@@ -87,6 +97,7 @@ export default function SettingsPage() {
                   placeholder="再次输入新密码"
                   required
                   minLength={6}
+                  maxLength={PASSWORD_MAX}
                   className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 />
               </div>

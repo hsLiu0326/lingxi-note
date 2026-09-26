@@ -19,6 +19,9 @@ from app.middleware import (
     verify_password,
     create_access_token,
     get_current_user,
+    normalize_email,
+    is_valid_email,
+    validate_password,
 )
 from app.config import settings
 
@@ -33,16 +36,37 @@ CODE_TTL = 300  # seconds
 
 @router.post("/register", response_model=TokenResponse)
 def register(body: UserRegister, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.email == body.email).first()
+    email = normalize_email(body.email)
+    username = body.username.strip()
+    password = body.password
+
+    if not is_valid_email(email):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="邮箱格式不正确",
+        )
+    if not username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="用户名不能为空",
+        )
+    pwd_error = validate_password(password)
+    if pwd_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=pwd_error,
+        )
+
+    existing = db.query(User).filter(User.email == email).first()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered",
+            detail="该邮箱已注册",
         )
     user = User(
-        email=body.email,
-        username=body.username,
-        password_hash=hash_password(body.password),
+        email=email,
+        username=username,
+        password_hash=hash_password(password),
     )
     db.add(user)
     db.commit()
@@ -56,7 +80,7 @@ def register(body: UserRegister, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 def login(body: UserLogin, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == body.email).first()
+    user = db.query(User).filter(User.email == normalize_email(body.email)).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -160,17 +184,18 @@ def change_password(
     if not current_user.password_hash:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Password not set for this account (phone login?)",
+            detail="该账号是手机号注册的，尚未设置密码",
         )
     if not verify_password(body.old_password, current_user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="旧密码错误",
         )
-    if len(body.new_password) < 6:
+    pwd_error = validate_password(body.new_password)
+    if pwd_error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="新密码至少 6 位",
+            detail=pwd_error,
         )
     current_user.password_hash = hash_password(body.new_password)
     db.commit()
