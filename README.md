@@ -2,11 +2,17 @@
 
 > AI 驱动的智能文案生成工具，一键生成小红书爆款内容。
 
-🌐 **线上前端页面**: [http://lingxinote.top](http://lingxinote.top)（在浏览器打开这个）
+🌐 **线上前端页面**: [http://106.15.131.213](http://106.15.131.213)（在浏览器打开这个）
 
-📡 **API 接口**: `http://lingxinote.top/api`（前端调用；浏览器直接打开 `http://lingxinote.top/api/health` 会返回 JSON 状态）
+📡 **API 接口**: `http://106.15.131.213/api`（前端调用；浏览器直接打开 `http://106.15.131.213/api/health` 会返回 JSON 状态）
 
-🔗 **备用地址**: `http://47.86.227.167`
+🔗 **备用地址**: `http://106.15.131.213:8080`（80 端口被拦时用这个）
+
+> ⚠️ **关于域名 `lingxinote.top`**：当前服务器在阿里云华东2（上海），属中国内地节点。
+> 按工信部规定，未完成 ICP 备案的域名解析到内地服务器会被阿里云监测系统阻断访问。
+> 因此现在用**公网 IP + 端口**方式提供访问。备案通过后可切换回域名。
+> 参考：[阿里云帮助中心 — 未备案域名解析至不同地区是否可以访问](https://help.aliyun.com/zh/icp-filing/not-for-the-record-dns-can-access-to-different-areas)
+
 
 ## 📸 产品截图
 
@@ -106,36 +112,52 @@ npm run dev
 
 | 项目 | 信息 |
 |------|------|
-| 服务器 IP | `47.86.227.167` |
-| 域名 | `lingxinote.top` |
+| 服务器 IP | `106.15.131.213`（阿里云 ECS · 华东2 上海） |
+| 系统 | Ubuntu 22.04 LTS（2 核 2G / 40G ESSD） |
+| 访问端口 | `80` 和 `8080`（双端口，80 被拦时用 8080） |
+| 域名 | `lingxinote.top`（**未备案，当前不可用于内地服务器**） |
 | 项目路径 | `/opt/xhs-copywriter` |
 
 ```bash
-# 将项目上传到服务器后运行
-chmod +x deploy.sh
+# 1. 本地上传代码到服务器
+bash sync_to_server.sh
+
+# 2. 登录服务器执行部署（可重复执行，已完成的步骤会跳过）
+ssh root@106.15.131.213
+cd /opt/xhs-copywriter
 sudo bash deploy.sh
 ```
 
 部署脚本自动完成：
-1. 安装 Python/Node.js/Nginx
-2. 配置后端虚拟环境 + systemd 服务
-3. 构建前端 + systemd 服务
-4. 配置 Nginx 反向代理
-5. (可选) Let's Encrypt SSL
+1. 安装 Python / Nginx / Redis
+2. 安装 Node.js 20（Ubuntu 自带的 v12 太旧，Next.js 15 跑不起来）
+3. 创建 2G swap（2G 内存打包 Next.js 容易 OOM）
+4. 配置后端虚拟环境 + systemd 服务（`xhs-api`）
+5. 构建前端 + systemd 服务（`xhs-frontend`）
+6. 配置 Nginx 反向代理（80 + 8080 双端口，`/api/` 关闭缓冲以支持 SSE 流式输出）
+
+> **两处易踩的坑**
+> - 阿里云**安全组**必须单独放行 80 / 8080，只在服务器里配防火墙是不够的，这是两道门。
+> - 前端 `NEXT_PUBLIC_API_URL` 故意留空，改用同源相对路径请求，因此以后换 IP、换端口、换域名都**无需重新构建前端**。
+
 
 ### 手动部署检查清单
 
 部署前确认以下配置已完成：
 
 - [ ] `backend/.env` — 已配置 `SECRET_KEY`、`OPENAI_API_KEY`、`REDIS_URL`
-- [ ] `frontend/.env.local` — 已配置 `NEXT_PUBLIC_API_URL` 指向后端
-- [ ] `deploy.sh` — `DOMAIN` 变量已设为实际域名
-- [ ] Redis 服务已启动（手机验证码必需）
-- [ ] 80 / 443 端口已开放（防火墙 / 安全组）
+- [ ] `frontend/.env.local` — `NEXT_PUBLIC_API_URL` 留空（同源请求，由 Nginx 转发）
+- [ ] Redis 服务已启动（手机验证码用；未启动时后端自动降级为内存模式）
+- [ ] 80 / 8080 端口已在**阿里云安全组**放行（服务器内防火墙是另一道门）
 
 ### 同步代码到服务器
 
-> 同步脚本 `sync_to_server.sh` 为本地运维工具（包含服务器凭据），未纳入本仓库，请自行在本地维护。
+```bash
+bash sync_to_server.sh          # 打包上传到 /opt/xhs-copywriter
+```
+
+> `sync_to_server.sh` 为本地运维工具，已加入 `.gitignore`，不纳入仓库。
+> 密码不再写死在脚本里；推荐配置 SSH 密钥登录，之后免密上传。
 
 ## ⚙️ 环境变量
 
@@ -164,7 +186,11 @@ sudo bash deploy.sh
 
 | 变量 | 说明 | 示例 |
 |------|------|------|
-| `NEXT_PUBLIC_API_URL` | 后端地址（不要带 `/api` 后缀，代码会自动拼接） | `http://lingxinote.top` |
+| `NEXT_PUBLIC_API_URL` | 后端地址。**留空 = 同源相对路径**（推荐，生产环境由 Nginx 转发）；本地开发时填后端地址 | `` 或 `http://localhost:8000` |
+
+> 该变量在**构建时**被写死进前端代码，改动后必须重新 `npm run build`。
+> 生产环境留空，换 IP / 换端口 / 换域名都无需重新构建。
+
 
 ## ❓ 常见问题
 

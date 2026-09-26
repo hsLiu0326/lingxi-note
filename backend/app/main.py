@@ -24,7 +24,14 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://lingxinote.top", "http://www.lingxinote.top", "http://47.86.227.167"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://106.15.131.213",
+        "http://106.15.131.213:8080",
+        "http://lingxinote.top",
+        "http://www.lingxinote.top",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
