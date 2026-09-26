@@ -1,5 +1,3 @@
-from datetime import datetime, timezone, date
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -9,6 +7,7 @@ from app.models.generation import Generation
 from app.schemas.generate import HistoryListResponse, HistoryResponse
 from app.schemas.user import UsageResponse
 from app.middleware import get_current_user
+from app.services.quota import count_today
 
 router = APIRouter(prefix="/api/user", tags=["user"])
 
@@ -51,17 +50,7 @@ def get_usage(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    today_start = datetime.combine(date.today(), datetime.min.time()).replace(
-        tzinfo=timezone.utc
-    )
-    used_today = (
-        db.query(Generation)
-        .filter(
-            Generation.user_id == current_user.id,
-            Generation.created_at >= today_start,
-        )
-        .count()
-    )
+    used_today = count_today(db, current_user.id)
     limit = current_user.effective_daily_limit()
     return UsageResponse(
         used_today=used_today,

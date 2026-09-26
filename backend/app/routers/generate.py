@@ -12,7 +12,6 @@ error       纯文本，全部任务失败（此时不入库，也不消耗当�
 
 import asyncio
 import json
-from datetime import datetime, timezone, date
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -24,6 +23,7 @@ from app.models.generation import Generation
 from app.schemas.generate import GenerateRequest
 from app.middleware import get_current_user
 from app.services.ai_service import TASK_KEYS, TASK_TIMEOUT, stream_task
+from app.services.quota import check_daily_limit
 
 router = APIRouter(prefix="/api", tags=["generate"])
 
@@ -35,23 +35,6 @@ _TASK_COLUMNS: dict[str, str] = {
     "emoji": "emoji_result",
     "zhongcao": "zhongcao_result",
 }
-
-
-def _check_daily_limit(user: User, db: Session) -> tuple[int, int]:
-    """Check user's daily usage. Returns (used_today, daily_limit)."""
-    today_start = datetime.combine(date.today(), datetime.min.time()).replace(
-        tzinfo=timezone.utc
-    )
-    used = (
-        db.query(Generation)
-        .filter(
-            Generation.user_id == user.id,
-            Generation.created_at >= today_start,
-        )
-        .count()
-    )
-    limit = user.effective_daily_limit()
-    return used, limit
 
 
 def _friendly_error(exc: Exception) -> str:
@@ -126,7 +109,7 @@ async def generate(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    used, limit = _check_daily_limit(current_user, db)
+    used, limit = check_daily_limit(current_user, db)
     if used >= limit:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,

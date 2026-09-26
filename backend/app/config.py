@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # App limits
     daily_free_limit: int = 3
     premium_daily_limit: int = 999
+    # 业务时区偏移（小时）。每日额度按这个时区的 00:00 重置。
+    # 8 = 北京时间（UTC+8）。服务器在哪个时区都不影响这个口径。
+    business_timezone_offset: int = 8
 
     # SMS — PNVS (阿里云个人开发者验证码服务)
     # sms_enabled=true 时使用 PNVS SendSmsVerifyCode API 发送真实验证码

@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, field_serializer
 
+from app.schemas.generate import to_iso_utc
+
 
 class UserRegister(BaseModel):
     email: str
@@ -47,7 +49,7 @@ class UserResponse(BaseModel):
 
     @field_serializer("created_at")
     def serialize_created_at(self, dt: datetime) -> str:
-        return dt.isoformat()
+        return to_iso_utc(dt)
 
 
 class UsageResponse(BaseModel):
