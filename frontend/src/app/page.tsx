@@ -197,7 +197,7 @@ export default function HomePage() {
         <div className="reveal-up bg-white/70 backdrop-blur-sm rounded-3xl border border-gray-100/60 p-10 shadow-sm max-w-sm mx-auto animate-border-glow">
           <div className="grid grid-cols-3 gap-8">
             {[
-              { label: "生成速度", value: "< 30s" },
+              { label: "生成速度", value: "< 5s" },
               { label: "免费额度", value: "3次/日" },
               { label: "适用平台", value: "小红书" },
             ].map((stat, i) => (
