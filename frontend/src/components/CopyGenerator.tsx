@@ -2,15 +2,36 @@
 
 import { useState, useRef } from "react";
 import { generateStreamAsync } from "@/lib/api";
-import ResultCard from "./ResultCard";
+import ResultCard, { type TaskStatus } from "./ResultCard";
 
-type ResultData = {
-  titles: string;
-  opening: string;
-  deai: string;
-  emoji: string;
-  zhongcao: string;
+/** 5 个任务的定义，顺序即页面上的卡片顺序 */
+const TASKS = [
+  { key: "titles", label: "🔥 10 个爆款标题" },
+  { key: "opening", label: "💫 情绪化开头" },
+  { key: "deai", label: "🔄 去 AI 味改写" },
+  { key: "emoji", label: "😊 加入 Emoji" },
+  { key: "zhongcao", label: "🌱 种草风格" },
+] as const;
+
+type TaskKey = (typeof TASKS)[number]["key"];
+
+type TaskState = {
+  text: string;
+  status: TaskStatus;
+  message?: string;
 };
+
+type Results = Record<TaskKey, TaskState>;
+
+function emptyResults(): Results {
+  return {
+    titles: { text: "", status: "pending" },
+    opening: { text: "", status: "pending" },
+    deai: { text: "", status: "pending" },
+    emoji: { text: "", status: "pending" },
+    zhongcao: { text: "", status: "pending" },
+  };
+}
 
 function LimitModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   if (!open) return null;
@@ -55,9 +76,14 @@ export default function CopyGenerator({
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
-  const [results, setResults] = useState<ResultData | null>(null);
+  const [results, setResults] = useState<Results | null>(null);
   const [showLimit, setShowLimit] = useState(false);
   const abortRef = useRef(false);
+
+  /** 只更新某一个任务的状态，其余保持不变 */
+  const patch = (key: TaskKey, fn: (state: TaskState) => TaskState) => {
+    setResults((prev) => (prev ? { ...prev, [key]: fn(prev[key]) } : prev));
+  };
 
   const handleGenerate = async () => {
     if (!text.trim() || text.trim().length < 5) {
@@ -66,16 +92,15 @@ export default function CopyGenerator({
     }
 
     setLoading(true);
-    setStatus("初始化...");
-    setResults(null);
+    setStatus("正在连接 AI...");
+    setResults(emptyResults());
     abortRef.current = false;
 
-    const newResults: ResultData = {
-      titles: "",
-      opening: "",
-      deai: "",
-      emoji: "",
-      zhongcao: "",
+    const finished = new Set<TaskKey>();
+
+    const markFinished = (key: TaskKey) => {
+      finished.add(key);
+      setStatus(`已完成 ${finished.size} / ${TASKS.length} 项`);
     };
 
     try {
@@ -86,29 +111,44 @@ export default function CopyGenerator({
           case "status":
             setStatus(data);
             break;
-          case "titles":
-            newResults.titles = data;
-            setResults({ ...newResults });
+
+          case "chunk": {
+            const { task, text: piece } = JSON.parse(data) as {
+              task: TaskKey;
+              text: string;
+            };
+            patch(task, (s) => ({
+              ...s,
+              text: s.text + piece,
+              status: "streaming",
+            }));
             break;
-          case "opening":
-            newResults.opening = data;
-            setResults({ ...newResults });
+          }
+
+          case "task_done": {
+            const { task } = JSON.parse(data) as { task: TaskKey };
+            patch(task, (s) => ({ ...s, status: "done" }));
+            markFinished(task);
             break;
-          case "deai":
-            newResults.deai = data;
-            setResults({ ...newResults });
+          }
+
+          case "task_error": {
+            const { task, message } = JSON.parse(data) as {
+              task: TaskKey;
+              message: string;
+            };
+            patch(task, (s) => ({ ...s, status: "error", message }));
+            markFinished(task);
             break;
-          case "emoji":
-            newResults.emoji = data;
-            setResults({ ...newResults });
-            break;
-          case "zhongcao":
-            newResults.zhongcao = data;
-            setResults({ ...newResults });
-            break;
+          }
+
           case "done":
             setStatus("生成完成！");
             onGenerationComplete?.();
+            break;
+
+          case "error":
+            setStatus(data);
             break;
         }
       }
@@ -122,6 +162,22 @@ export default function CopyGenerator({
       }
     } finally {
       setLoading(false);
+      // 连接意外中断时，把没跑完的任务标记出来，避免一直转圈
+      setResults((prev) => {
+        if (!prev) return prev;
+        const next = { ...prev };
+        (Object.keys(next) as TaskKey[]).forEach((key) => {
+          const s = next[key];
+          if (s.status === "pending" || s.status === "streaming") {
+            next[key] = {
+              ...s,
+              status: "error",
+              message: s.text ? "连接中断，内容可能不完整" : "连接中断，未生成",
+            };
+          }
+        });
+        return next;
+      });
     }
   };
 
@@ -176,44 +232,20 @@ export default function CopyGenerator({
         </div>
       )}
 
-      {/* Results */}
+      {/* Results — 5 张卡片同时出现，各自独立流式填充 */}
       {results && (
         <div className="space-y-4">
-          <ResultCard
-            title="🔥 10 个爆款标题"
-            content={results.titles}
-            onCopy={() => handleCopy(results.titles)}
-            loading={loading && !results.titles}
-            index={0}
-          />
-          <ResultCard
-            title="💫 情绪化开头"
-            content={results.opening}
-            onCopy={() => handleCopy(results.opening)}
-            loading={loading && !results.opening}
-            index={1}
-          />
-          <ResultCard
-            title="🔄 去 AI 味改写"
-            content={results.deai}
-            onCopy={() => handleCopy(results.deai)}
-            loading={loading && !results.deai}
-            index={2}
-          />
-          <ResultCard
-            title="😊 加入 Emoji"
-            content={results.emoji}
-            onCopy={() => handleCopy(results.emoji)}
-            loading={loading && !results.emoji}
-            index={3}
-          />
-          <ResultCard
-            title="🌱 种草风格"
-            content={results.zhongcao}
-            onCopy={() => handleCopy(results.zhongcao)}
-            loading={loading && !results.zhongcao}
-            index={4}
-          />
+          {TASKS.map((task, index) => (
+            <ResultCard
+              key={task.key}
+              title={task.label}
+              content={results[task.key].text}
+              status={results[task.key].status}
+              message={results[task.key].message}
+              onCopy={() => handleCopy(results[task.key].text)}
+              index={index}
+            />
+          ))}
         </div>
       )}
 

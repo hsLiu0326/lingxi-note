@@ -109,7 +109,14 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 120s;
+
+        # SSE 流式输出必须关掉缓冲，否则 Nginx 会把内容攒成一大块再发，
+        # 前端就看不到「逐字出现」的效果了。
+        proxy_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding on;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
     }
 }
 EOF
