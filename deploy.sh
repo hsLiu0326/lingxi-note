@@ -31,7 +31,16 @@ fi
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── 0. 把代码同步到正式目录 ──────────────────────────────
-echo "[0/8] 同步代码到 $PROJECT_DIR ..."
+echo "[0/8] 检查系统完整性..."
+# 先装依赖再同步代码：rsync 本身也要靠这一步装上，
+# 顺序反了在纯净系统上会直接报 command not found
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq \
+  python3 python3-pip python3-venv \
+  nginx git curl rsync redis-server ca-certificates
+
+echo "[1/8] 同步代码到 $PROJECT_DIR ..."
 if [ "$SRC_DIR" != "$PROJECT_DIR" ]; then
   mkdir -p "$PROJECT_DIR"
   # 注意：被 --exclude 排除的文件不会被 --delete 删除，
@@ -48,15 +57,9 @@ if [ "$SRC_DIR" != "$PROJECT_DIR" ]; then
     --exclude '*.db' \
     --exclude '.env' \
     "$SRC_DIR"/ "$PROJECT_DIR"/
+else
+  echo "  源码已在 $PROJECT_DIR，跳过"
 fi
-
-# ── 1. 系统依赖 ─────────────────────────────────────────
-echo "[1/8] 安装系统依赖..."
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq \
-  python3 python3-pip python3-venv \
-  nginx git curl rsync redis-server ca-certificates
 
 # ── 2. Node.js 20 ──────────────────────────────────────
 # 坑：Ubuntu 22.04 自带的 nodejs 是 v12，Next.js 15 要求 18+，
