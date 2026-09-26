@@ -1,5 +1,13 @@
 """文案生成路由：5 个任务并行执行，并以 SSE 把每个字实时推给前端。
 
+额度模型
+--------
+请求进来先写一条**占位记录**把当日额度占住（详见 services/quota.py）：
+
+- 5 项任务全部失败 → 删掉占位记录，额度退还，前端收到 error 事件；
+- 中途断开／关页面 → 占位记录保留，额度照扣（堵住白嫖），
+  并把已经收到的内容落库，历史记录里不会留下空白条目。
+
 SSE 事件协议（v2）
 ------------------
 status      纯文本，通用状态提示
@@ -7,7 +15,7 @@ chunk       JSON {"task": "...", "text": "..."}   —— 某个任务的一个�
 task_done   JSON {"task": "..."}                  —— 某个任务生成完毕
 task_error  JSON {"task": "...", "message": "..."} —— 某个任务失败
 done        JSON {"generation_id": N}             —— 全部结束且已入库
-error       纯文本，全部任务失败（此时不入库，也不消耗当日额度）
+error       纯文本，全部任务失败（已退还额度）
 """
 
 import asyncio
@@ -17,24 +25,18 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-from app.database import get_db, SessionLocal
+from app.database import get_db
 from app.models.user import User
-from app.models.generation import Generation
 from app.schemas.generate import GenerateRequest
 from app.middleware import get_current_user
 from app.services.ai_service import TASK_KEYS, TASK_TIMEOUT, stream_task
-from app.services.quota import check_daily_limit
+from app.services.quota import (
+    finalize_reservation,
+    release_reservation,
+    try_reserve,
+)
 
 router = APIRouter(prefix="/api", tags=["generate"])
-
-# 任务名 → generations 表的字段名
-_TASK_COLUMNS: dict[str, str] = {
-    "titles": "titles",
-    "opening": "opening",
-    "deai": "deai_result",
-    "emoji": "emoji_result",
-    "zhongcao": "zhongcao_result",
-}
 
 
 def _friendly_error(exc: Exception) -> str:
@@ -50,22 +52,23 @@ def _friendly_error(exc: Exception) -> str:
     return f"生成失败：{msg[:120]}"
 
 
-async def _pump(task: str, user_text: str, queue: asyncio.Queue, parts: list[str]):
-    """把单个任务的分片边收边塞进队列。"""
+async def _pump(
+    task: str, user_text: str, queue: asyncio.Queue, collected: dict[str, list[str]]
+):
+    """把单个任务的分片边收边塞进队列，同时留存一份用于中途断开时落库。"""
     async for chunk in stream_task(task, user_text):
-        parts.append(chunk)
+        collected[task].append(chunk)
         await queue.put({"type": "chunk", "task": task, "text": chunk})
 
 
 async def _run_task(
-    task: str, user_text: str, queue: asyncio.Queue
-) -> tuple[str, str, bool]:
-    """跑完单个任务。返回 (任务名, 完整文本, 是否成功)。"""
-    parts: list[str] = []
+    task: str, user_text: str, queue: asyncio.Queue, collected: dict[str, list[str]]
+) -> tuple[str, bool]:
+    """跑完单个任务。返回 (任务名, 是否成功)。"""
     ok = False
     try:
         await asyncio.wait_for(
-            _pump(task, user_text, queue, parts), timeout=TASK_TIMEOUT
+            _pump(task, user_text, queue, collected), timeout=TASK_TIMEOUT
         )
         ok = True
     except asyncio.TimeoutError:
@@ -82,25 +85,7 @@ async def _run_task(
         )
     else:
         await queue.put({"type": "task_done", "task": task})
-    return task, "".join(parts), ok
-
-
-def _save_generation(
-    user_id: int, original_text: str, results: dict[str, tuple[str, bool]]
-) -> int:
-    """写入历史记录。用独立的 Session，避免流式响应期间依赖被回收。"""
-    db = SessionLocal()
-    try:
-        gen = Generation(user_id=user_id, original_text=original_text)
-        for task, column in _TASK_COLUMNS.items():
-            body = results.get(task, ("", False))[0]
-            setattr(gen, column, body or None)
-        db.add(gen)
-        db.commit()
-        db.refresh(gen)
-        return gen.id
-    finally:
-        db.close()
+    return task, ok
 
 
 @router.post("/generate")
@@ -109,13 +94,6 @@ async def generate(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    used, limit = check_daily_limit(current_user, db)
-    if used >= limit:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Daily limit ({limit}) reached. Upgrade to premium for unlimited access.",
-        )
-
     user_text = body.text.strip()
     if not user_text or len(user_text) < 5:
         raise HTTPException(
@@ -123,14 +101,31 @@ async def generate(
             detail="Text must be at least 5 characters",
         )
 
-    user_id = current_user.id
+    limit = current_user.effective_daily_limit()
+    gen_id = try_reserve(db, current_user.id, user_text, limit)
+    if gen_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Daily limit ({limit}) reached. Upgrade to premium for unlimited access.",
+        )
 
     async def event_generator():
         queue: asyncio.Queue[dict] = asyncio.Queue()
+        collected: dict[str, list[str]] = {task: [] for task in TASK_KEYS}
         tasks = [
-            asyncio.create_task(_run_task(task, user_text, queue))
+            asyncio.create_task(_run_task(task, user_text, queue, collected))
             for task in TASK_KEYS
         ]
+        persisted = False
+
+        def persist() -> bool:
+            """把已收到的内容写入占位记录。一项内容都没有则退还额度。"""
+            contents = {task: "".join(collected[task]) for task in TASK_KEYS}
+            if not any(contents.values()):
+                release_reservation(gen_id)
+                return False
+            finalize_reservation(gen_id, contents)
+            return True
 
         try:
             yield {
@@ -171,27 +166,38 @@ async def generate(
                         ),
                     }
 
-            collected = await asyncio.gather(*tasks)
-            results = {task: (text, ok) for task, text, ok in collected}
+            await asyncio.gather(*tasks, return_exceptions=True)
 
-            if not any(ok for _, ok in results.values()):
-                # 全部失败：不入库，相当于不消耗用户的当日额度
+            persisted = persist()
+            if persisted:
+                yield {
+                    "event": "done",
+                    "data": json.dumps(
+                        {"generation_id": gen_id}, ensure_ascii=False
+                    ),
+                }
+            else:
                 yield {
                     "event": "error",
-                    "data": "全部生成任务都失败了，请稍后重试",
+                    "data": "全部生成任务都失败了，本次不消耗额度",
                 }
-                return
-
-            gen_id = _save_generation(user_id, user_text, results)
-            yield {
-                "event": "done",
-                "data": json.dumps({"generation_id": gen_id}, ensure_ascii=False),
-            }
         finally:
+            # 客户端中途断开时上面的 persist() 不会执行，但额度必须扣掉 ——
+            # 这正是要堵的漏洞。同时把已经收到的内容落库，
+            # 避免历史记录里留下一张空白卡片。
+            if not persisted:
+                try:
+                    persist()
+                except Exception:  # noqa: BLE001 — 收尾失败不应掩盖原始异常
+                    pass
+
             for task in tasks:
                 if not task.done():
                     task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception:  # noqa: BLE001 — 收尾阶段的异常不应影响已扣的额度
+                pass
 
     return EventSourceResponse(
         event_generator(),
