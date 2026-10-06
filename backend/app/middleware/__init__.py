@@ -88,6 +88,19 @@ def validate_password(password: str) -> str | None:
     return None
 
 
+# ── 手机号 ──────────────────────────────────────────────────────────
+_CN_PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
+
+
+def is_valid_cn_phone(phone: str) -> bool:
+    """中国大陆手机号格式校验。
+
+    接口层不校验的话，用户填任何字符串都会被拿去调短信接口，
+    既白白消耗调用次数，也拿不到有用的错误信息。
+    """
+    return bool(_CN_PHONE_RE.match((phone or "").strip()))
+
+
 def create_access_token(user_id: int) -> str:
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=settings.access_token_expire_minutes

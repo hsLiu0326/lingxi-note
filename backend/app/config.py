@@ -32,14 +32,15 @@ class Settings(BaseSettings):
 
     # SMS — PNVS (阿里云个人开发者验证码服务)
     # sms_enabled=true 时使用 PNVS SendSmsVerifyCode API 发送真实验证码
-    # false 时使用固定码 000000（开发模式）
+    # false 时使用固定码 000000（开发模式，任何手机号都能登进来，切勿在生产开启）
     sms_enabled: bool = False
     sms_access_key: str = ""
     sms_secret_key: str = ""
-    # PNVS 个人开发者不需要自定义签名和模板，留空即可
-    # 如果配置了值，会作为参数传给 API
+    # 签名名称和模板 Code 都是**必填**，用控制台赠送的那一套
+    # （赠送签名必须搭配赠送模板；登录/注册模板 Code 为 100001）
+    # 查看位置：号码认证服务控制台 → 短信认证参数配置 → 签名配置/模板配置 → 赠送
     sms_sign_name: str = ""
-    sms_template_code: str = ""
+    sms_template_code: str = "100001"
 
     class Config:
         env_file = ".env"

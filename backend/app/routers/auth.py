@@ -22,6 +22,7 @@ from app.middleware import (
     normalize_email,
     is_valid_email,
     validate_password,
+    is_valid_cn_phone,
 )
 from app.config import settings
 
@@ -100,18 +101,20 @@ def login(body: UserLogin, db: Session = Depends(get_db)):
 
 @router.post("/phone/send-code")
 async def send_phone_code(body: PhoneSendCodeRequest):
-    """Send SMS verification code to phone number.
+    """给指定手机号发送短信验证码。
 
-    When ``SMS_ENABLED=false`` (default), the code is always ``000000``
-    for local development.
+    ``SMS_ENABLED=false``（开发模式）时验证码固定为 ``000000``，只打印在
+    服务器日志里，**不会真的发短信**，任何手机号都能登录 —— 生产环境必须
+    保持 ``SMS_ENABLED=true``。
 
-    When ``SMS_ENABLED=true``, the code is sent via Aliyun PNVS
-    (personal developer verification code service).
+    ``SMS_ENABLED=true`` 时通过阿里云 PNVS 发送真实验证码
+    （个人开发者可用，无需企业资质）。
     """
     phone = body.phone.strip()
-    if not phone:
+    if not is_valid_cn_phone(phone):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Phone number required"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请输入正确的手机号",
         )
 
     if settings.sms_enabled:
@@ -122,11 +125,14 @@ async def send_phone_code(body: PhoneSendCodeRequest):
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"短信发送失败: {e}",
+                detail=f"短信发送失败：{e}",
             )
     else:
         code = "000000"
-        print(f"\n[SMS CODE] Phone: {phone}  Code: {code}  (expires in {CODE_TTL}s)\n")
+        print(
+            f"\n[SMS CODE] Phone: {phone}  Code: {code}  "
+            f"(expires in {CODE_TTL}s)  -- 开发模式，未真实发送\n"
+        )
 
     await redis_setex(f"phone_code:{phone}", CODE_TTL, code)
 
@@ -141,17 +147,23 @@ async def phone_login(body: PhoneLoginRequest, db: Session = Depends(get_db)):
     phone = body.phone.strip()
     code = body.code.strip()
 
+    if not is_valid_cn_phone(phone):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请输入正确的手机号",
+        )
+
     stored = await redis_get(f"phone_code:{phone}")
     if stored is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No code sent to this number or code expired",
+            detail="验证码已过期或未发送，请重新获取",
         )
 
     if stored != code:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid verification code",
+            detail="验证码错误",
         )
 
     await redis_delete(f"phone_code:{phone}")
